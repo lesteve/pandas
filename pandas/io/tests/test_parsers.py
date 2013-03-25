@@ -19,7 +19,9 @@ import pandas.io.parsers as parsers
 from pandas.io.parsers import (read_csv, read_table, read_fwf,
                                TextFileReader, TextParser)
 from pandas.util.testing import (assert_almost_equal,
-                                 assert_series_equal, network)
+                                 assert_series_equal, 
+                                 network,
+                                 ensure_clean)
 import pandas.util.testing as tm
 import pandas as pd
 
@@ -365,6 +367,21 @@ KORD6,19990127, 23:00:00, 22:56:00, -0.5900, 1.7100, 4.6000, 0.0000, 280.0000"""
         tm.assert_frame_equal(rs, xp)
         self.assert_(rs.index.name == xp.index.name)
 
+    def test_date_parser_int_bug(self):
+        # #3071
+        log_file = StringIO(
+            'posix_timestamp,elapsed,sys,user,queries,query_time,rows,'
+                'accountid,userid,contactid,level,silo,method\n'
+            '1343103150,0.062353,0,4,6,0.01690,3,'
+                '12345,1,-1,3,invoice_InvoiceResource,search\n'
+        )
+
+        def f(posix_string):
+            return datetime.utcfromtimestamp(int(posix_string))
+
+        # it works!
+        read_csv(log_file, index_col=0, parse_dates=0, date_parser=f)
+
     def test_multiple_skts_example(self):
         data = "year, month, a, b\n 2001, 01, 0.0, 10.\n 2001, 02, 1.1, 11."
         pass
@@ -514,6 +531,7 @@ ignore,this,row
                              columns=[1, 2, 3],
                              index=[datetime(2000, 1, 1), datetime(2000, 1, 2),
                                     datetime(2000, 1, 3)])
+        expected.index.name = 0
         tm.assert_frame_equal(data, expected)
         tm.assert_frame_equal(data, data2)
 
@@ -627,7 +645,7 @@ c,4,5
         idx = DatetimeIndex([datetime(2009, 1, 31, 0, 10, 0),
                              datetime(2009, 2, 28, 10, 20, 0),
                              datetime(2009, 3, 31, 8, 30, 0)]).asobject
-        idx.name = 'date'
+        idx.name = 'date_time'
         xp = DataFrame({'B': [1, 3, 5], 'C': [2, 4, 6]}, idx)
         tm.assert_frame_equal(rs, xp)
 
@@ -636,7 +654,7 @@ c,4,5
         idx = DatetimeIndex([datetime(2009, 1, 31, 0, 10, 0),
                              datetime(2009, 2, 28, 10, 20, 0),
                              datetime(2009, 3, 31, 8, 30, 0)]).asobject
-        idx.name = 'date'
+        idx.name = 'date_time'
         xp = DataFrame({'B': [1, 3, 5], 'C': [2, 4, 6]}, idx)
         tm.assert_frame_equal(rs, xp)
 
@@ -967,7 +985,7 @@ bar,two,12,13,14,15
         df = self.read_csv(StringIO(no_header), index_col=[0, 1],
                            header=None, names=names)
         expected = self.read_csv(StringIO(data), index_col=[0, 1])
-        tm.assert_frame_equal(df, expected)
+        tm.assert_frame_equal(df, expected, check_names=False)
 
         # 2 implicit first cols
         df2 = self.read_csv(StringIO(data2))
@@ -977,7 +995,7 @@ bar,two,12,13,14,15
         df = self.read_csv(StringIO(no_header), index_col=[1, 0], names=names,
                            header=None)
         expected = self.read_csv(StringIO(data), index_col=[1, 0])
-        tm.assert_frame_equal(df, expected)
+        tm.assert_frame_equal(df, expected, check_names=False)
 
     def test_multi_index_parse_dates(self):
         data = """index1,index2,A,B,C
@@ -1162,11 +1180,13 @@ a,b,c,d
 
         xp = DataFrame({'b': [np.nan], 'd': [5]},
                        MultiIndex.from_tuples([(0, 1)]))
+        xp.index.names = ['a', 'c']
         df = self.read_csv(StringIO(data), na_values={}, index_col=[0, 2])
         tm.assert_frame_equal(df, xp)
 
         xp = DataFrame({'b': [np.nan], 'd': [5]},
                        MultiIndex.from_tuples([(0, 1)]))
+        xp.index.names = ['a', 'c']
         df = self.read_csv(StringIO(data), na_values={}, index_col=['a', 'c'])
         tm.assert_frame_equal(df, xp)
 
@@ -1249,7 +1269,7 @@ KORD6,19990127, 23:00:00, 22:56:00, -0.5900, 1.7100, 4.6000, 0.0000, 280.0000"""
         tm.assert_frame_equal(df2, df)
 
         df3 = self.read_csv(StringIO(data), parse_dates=[[1, 2]], index_col=0)
-        tm.assert_frame_equal(df3, df)
+        tm.assert_frame_equal(df3, df, check_names=False)
 
     def test_multiple_date_cols_chunked(self):
         df = self.read_csv(StringIO(self.ts_data), parse_dates={
@@ -1354,29 +1374,25 @@ A,B,C
 
         path = '__%s__.csv' % tm.rands(10)
 
-        for sep, dat in [('\t', data), (',', data2)]:
-            for enc in ['utf-16', 'utf-16le', 'utf-16be']:
-                bytes = dat.encode(enc)
-                with open(path, 'wb') as f:
-                    f.write(bytes)
+        with ensure_clean(path) as path:
+            for sep, dat in [('\t', data), (',', data2)]:
+                for enc in ['utf-16', 'utf-16le', 'utf-16be']:
+                    bytes = dat.encode(enc)
+                    with open(path, 'wb') as f:
+                        f.write(bytes)
+                        
+                    s = BytesIO(dat.encode('utf-8'))
+                    if py3compat.PY3:
+                        # somewhat False since the code never sees bytes
+                        from io import TextIOWrapper
+                        s = TextIOWrapper(s, encoding='utf-8')
 
-                s = BytesIO(dat.encode('utf-8'))
-                if py3compat.PY3:
-                    # somewhat False since the code never sees bytes
-                    from io import TextIOWrapper
-                    s = TextIOWrapper(s, encoding='utf-8')
+                    result = self.read_csv(path, encoding=enc, skiprows=2,
+                                           sep=sep)
+                    expected = self.read_csv(s, encoding='utf-8', skiprows=2,
+                                             sep=sep)
 
-                result = self.read_csv(path, encoding=enc, skiprows=2,
-                                       sep=sep)
-                expected = self.read_csv(s, encoding='utf-8', skiprows=2,
-                                         sep=sep)
-
-                tm.assert_frame_equal(result, expected)
-
-        try:
-            os.remove(path)
-        except os.error:
-            pass
+                    tm.assert_frame_equal(result, expected)
 
     def test_utf16_example(self):
         path = os.path.join(self.dirpath, 'utf16_ex.txt')
@@ -1704,32 +1720,27 @@ eight,1,2,3"""
         if PY3:
             raise nose.SkipTest
 
-        with open('__foo__.txt', 'wb') as f:
-            f.write('AAA\nBBB\nCCC\nDDD\nEEE\nFFF\nGGG')
+        with ensure_clean() as path:
+            with open(path, 'wb') as f:
+                f.write('AAA\nBBB\nCCC\nDDD\nEEE\nFFF\nGGG')
 
-        with open('__foo__.txt', 'rb') as f:
-            for line in f:
-                if 'CCC' in line:
-                    break
+            with open(path, 'rb') as f:
+                for line in f:
+                    if 'CCC' in line:
+                        break
 
-            try:
-                read_table(f, squeeze=True, header=None, engine='c')
-            except Exception:
-                pass
-            else:
-                raise ValueError('this should not happen')
+                try:
+                    read_table(f, squeeze=True, header=None, engine='c')
+                except Exception:
+                    pass
+                else:
+                    raise ValueError('this should not happen')
 
-            result = read_table(f, squeeze=True, header=None,
-                                engine='python')
+                result = read_table(f, squeeze=True, header=None,
+                                    engine='python')
 
-            expected = Series(['DDD', 'EEE', 'FFF', 'GGG'])
-            tm.assert_series_equal(result, expected)
-
-        try:
-            os.remove('__foo__.txt')
-        except os.error:
-            pass
-
+                expected = Series(['DDD', 'EEE', 'FFF', 'GGG'])
+                tm.assert_series_equal(result, expected)
 
 class TestCParserHighMemory(ParserTests, unittest.TestCase):
 
@@ -1906,41 +1917,30 @@ a,b,c
         data = open(self.csv1, 'rb').read()
         expected = self.read_csv(self.csv1)
 
-        try:
-            tmp = gzip.GzipFile('__tmp__', mode='wb')
+        with ensure_clean() as path:
+            tmp = gzip.GzipFile(path, mode='wb')
             tmp.write(data)
             tmp.close()
 
-            result = self.read_csv('__tmp__', compression='gzip')
+            result = self.read_csv(path, compression='gzip')
             tm.assert_frame_equal(result, expected)
 
-            result = self.read_csv(open('__tmp__', 'rb'), compression='gzip')
+            result = self.read_csv(open(path, 'rb'), compression='gzip')
             tm.assert_frame_equal(result, expected)
-        finally:
-            # try:
-            #     os.remove('__tmp__')
-            # except:
-            #     pass
-            pass
 
-        try:
-            tmp = bz2.BZ2File('__tmp__', mode='wb')
+        with ensure_clean() as path:
+            tmp = bz2.BZ2File(path, mode='wb')
             tmp.write(data)
             tmp.close()
 
-            result = self.read_csv('__tmp__', compression='bz2')
+            result = self.read_csv(path, compression='bz2')
             tm.assert_frame_equal(result, expected)
 
-            # result = self.read_csv(open('__tmp__', 'rb'), compression='bz2')
+            # result = self.read_csv(open(path, 'rb'), compression='bz2')
             # tm.assert_frame_equal(result, expected)
 
             self.assertRaises(ValueError, self.read_csv,
-                              '__tmp__', compression='bz3')
-        finally:
-            try:
-                os.remove('__tmp__')
-            except:
-                pass
+                              path, compression='bz3')
 
     def test_decompression_regex_sep(self):
         try:
@@ -1953,35 +1953,24 @@ a,b,c
         data = data.replace(b',', b'::')
         expected = self.read_csv(self.csv1)
 
-        try:
-            tmp = gzip.GzipFile('__tmp__', mode='wb')
+        with ensure_clean() as path:
+            tmp = gzip.GzipFile(path, mode='wb')
             tmp.write(data)
             tmp.close()
 
-            result = self.read_csv('__tmp__', sep='::', compression='gzip')
+            result = self.read_csv(path, sep='::', compression='gzip')
             tm.assert_frame_equal(result, expected)
-        finally:
-            # try:
-            #     os.remove('__tmp__')
-            # except:
-            #     pass
-            pass
 
-        try:
-            tmp = bz2.BZ2File('__tmp__', mode='wb')
+        with ensure_clean() as path:
+            tmp = bz2.BZ2File(path, mode='wb')
             tmp.write(data)
             tmp.close()
 
-            result = self.read_csv('__tmp__', sep='::', compression='bz2')
+            result = self.read_csv(path, sep='::', compression='bz2')
             tm.assert_frame_equal(result, expected)
 
             self.assertRaises(ValueError, self.read_csv,
-                              '__tmp__', compression='bz3')
-        finally:
-            try:
-                os.remove('__tmp__')
-            except:
-                pass
+                              path, compression='bz3')
 
     def test_memory_map(self):
         # it works!

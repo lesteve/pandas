@@ -12,19 +12,15 @@ import shutil
 import warnings
 
 try:
-    BUILD_CACHE_DIR = None
-
-    # uncomment to activate the build cache
-    # BUILD_CACHE_DIR="/tmp/.pandas_build_cache/"
-
-    if os.isdir(BUILD_CACHE_DIR):
+    BUILD_CACHE_DIR = os.environ.get('BUILD_CACHE_DIR',"")
+    if os.path.isdir(BUILD_CACHE_DIR):
         print("--------------------------------------------------------")
         print("BUILD CACHE ACTIVATED. be careful, this is experimental.")
         print("--------------------------------------------------------")
     else:
         BUILD_CACHE_DIR = None
 except:
-    pass
+        BUILD_CACHE_DIR = None
 
 # may need to work around setuptools bug by providing a fake Pyrex
 try:
@@ -387,41 +383,6 @@ class CompilationCacheMixin(object):
         except:
             raise NotImplementedError("You must override this method")
 
-    # this is missing in 2.5, mro will do the right thing
-    def get_ext_fullpath(self, ext_name):
-        """Returns the path of the filename for a given extension.
-
-        The file is located in `build_lib` or directly in the package
-        (inplace option).
-        """
-        import string
-        # makes sure the extension name is only using dots
-        all_dots = string.maketrans('/' + os.sep, '..')
-        ext_name = ext_name.translate(all_dots)
-
-        fullname = self.get_ext_fullname(ext_name)
-        modpath = fullname.split('.')
-        filename = self.get_ext_filename(ext_name)
-        filename = os.path.split(filename)[-1]
-
-        if not self.inplace:
-            # no further work needed
-            # returning :
-            #   build_dir/package/path/filename
-            filename = os.path.join(*modpath[:-1] + [filename])
-            return os.path.join(self.build_lib, filename)
-
-        # the inplace option requires to find the package directory
-        # using the build_py command for that
-        package = '.'.join(modpath[0:-1])
-        build_py = self.get_finalized_command('build_py')
-        package_dir = os.path.abspath(build_py.get_package_dir(package))
-
-        # returning
-        #   package_dir/filename
-        return os.path.join(package_dir, filename)
-
-
 class CompilationCacheExtMixin(CompilationCacheMixin):
     def __init__(self, *args, **kwds):
         CompilationCacheMixin.__init__(self, *args, **kwds)
@@ -521,6 +482,8 @@ class CachingBuildExt(build_ext, CompilationCacheExtMixin):
             build_ext.cython_sources(self, [s], extension)
             self._put_to_cache(hash, target)
 
+        sources = [x for x in sources if x.startswith("pandas")]
+
         return sources
 
 
@@ -552,14 +515,14 @@ cmdclass = {'clean': CleanCommand,
 
 if cython:
     suffix = '.pyx'
-    cmdclass['build_ext'] = build_ext
+    cmdclass['build_ext'] = CheckingBuildExt
     if BUILD_CACHE_DIR:  # use the cache
         cmdclass['build_ext'] = CachingBuildExt
     cmdclass['cython'] = CythonCommand
 else:
     suffix = '.c'
     cmdclass['build_src'] = DummyBuildSrc
-    cmdclass['build_ext'] = build_ext
+    cmdclass['build_ext'] = CheckingBuildExt
 
 lib_depends = ['reduce', 'inference', 'properties']
 

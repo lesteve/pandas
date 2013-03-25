@@ -6,6 +6,7 @@ from datetime import datetime
 import random
 import string
 import sys
+import tempfile
 
 from contextlib import contextmanager  # contextlib is available since 2.5
 
@@ -14,7 +15,7 @@ from distutils.version import LooseVersion
 from numpy.random import randn
 import numpy as np
 
-from pandas.core.common import isnull
+from pandas.core.common import isnull, _is_sequence
 import pandas.core.index as index
 import pandas.core.series as series
 import pandas.core.frame as frame
@@ -73,6 +74,24 @@ def set_trace():
     except:
         from pdb import Pdb as OldPdb
         OldPdb().set_trace(sys._getframe().f_back)
+
+#------------------------------------------------------------------------------
+# contextmanager to ensure the file cleanup
+from contextlib import contextmanager
+@contextmanager
+def ensure_clean(filename = None):
+    # if we are not passed a filename, generate a temporary
+    if filename is None:
+        filename = tempfile.mkstemp()[1]
+
+    try:
+        yield filename
+    finally:
+        import os
+        try:
+            os.remove(filename)
+        except:
+            pass
 
 #------------------------------------------------------------------------------
 # Comparators
@@ -178,7 +197,8 @@ def assert_frame_equal(left, right, check_dtype=True,
                        check_index_type=False,
                        check_column_type=False,
                        check_frame_type=False,
-                       check_less_precise=False):
+                       check_less_precise=False,
+                       check_names=True):
     if check_frame_type:
         assert(type(left) == type(right))
     assert(isinstance(left, DataFrame))
@@ -204,6 +224,9 @@ def assert_frame_equal(left, right, check_dtype=True,
         assert(type(left.columns) == type(right.columns))
         assert(left.columns.dtype == right.columns.dtype)
         assert(left.columns.inferred_type == right.columns.inferred_type)
+    if check_names:
+        assert(left.index.names == right.index.names)
+        assert(left.columns.names == right.columns.names)
 
 
 def assert_panel_equal(left, right, 
@@ -218,7 +241,7 @@ def assert_panel_equal(left, right,
 
     for col, series in left.iterkv():
         assert(col in right)
-        assert_frame_equal(series, right[col], check_less_precise=check_less_precise)
+        assert_frame_equal(series, right[col], check_less_precise=check_less_precise, check_names=False)  # TODO strangely check_names fails in py3 ?
 
     for col in right:
         assert(col in left)
@@ -375,6 +398,7 @@ def makeCustomIndex(nentries, nlevels, prefix='#', names=False, ndupe_l=None,
     ndupe_l - (Optional), list of ints, the number of rows for which the
        label will repeated at the corresponding level, you can specify just
        the first few, the rest will use the default ndupe_l of 1.
+       len(ndupe_l) <= nlevels.
     idx_type - "i"/"f"/"s"/"u"/"dt".
        If idx_type is not None, `idx_nlevels` must be 1.
        "i"/"f" creates an integer/float index,
@@ -386,8 +410,8 @@ def makeCustomIndex(nentries, nlevels, prefix='#', names=False, ndupe_l=None,
 
     from pandas.util.compat import Counter
     if ndupe_l is None:
-        ndupe_l = [1] * nentries
-    assert len(ndupe_l) <= nentries
+        ndupe_l = [1] * nlevels
+    assert (_is_sequence(ndupe_l) and len(ndupe_l) <= nlevels)
     assert (names is None or names is False
             or names is True or len(names) is nlevels)
     assert idx_type is None or \
@@ -417,14 +441,19 @@ def makeCustomIndex(nentries, nlevels, prefix='#', names=False, ndupe_l=None,
         raise ValueError('"%s" is not a legal value for `idx_type`, use  '
                          '"i"/"f"/"s"/"u"/"dt".' % idx_type)
 
-    if len(ndupe_l) < nentries:
-        ndupe_l.extend([1] * (nentries - len(ndupe_l)))
-    assert len(ndupe_l) == nentries
+    if len(ndupe_l) < nlevels:
+        ndupe_l.extend([1] * (nlevels - len(ndupe_l)))
+    assert len(ndupe_l) == nlevels
 
     assert all([x > 0 for x in ndupe_l])
 
     tuples = []
     for i in range(nlevels):
+        def keyfunc(x):
+            import re
+            numeric_tuple = re.sub("[^\d_]_?","",x).split("_")
+            return map(int,numeric_tuple)
+
         # build a list of lists to create the index from
         div_factor = nentries // ndupe_l[i] + 1
         cnt = Counter()
@@ -432,7 +461,7 @@ def makeCustomIndex(nentries, nlevels, prefix='#', names=False, ndupe_l=None,
             label = prefix + '_l%d_g' % i + str(j)
             cnt[label] = ndupe_l[i]
         # cute Counter trick
-        result = list(sorted(cnt.elements()))[:nentries]
+        result = list(sorted(cnt.elements(), key=keyfunc))[:nentries]
         tuples.append(result)
 
     tuples = zip(*tuples)
@@ -498,6 +527,7 @@ def makeCustomDataframe(nrows, ncols, c_idx_names=True, r_idx_names=True,
                              r_idx_names=["FEE","FI","FO","FAM"],
                              c_idx_nlevels=2)
 
+    >> a=mkdf(5,3,r_idx_nlevels=2,c_idx_nlevels=4)
     """
 
     assert c_idx_nlevels > 0

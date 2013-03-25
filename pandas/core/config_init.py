@@ -1,5 +1,6 @@
 import pandas.core.config as cf
-from pandas.core.config import is_int, is_bool, is_text, is_float
+from pandas.core.config import (is_int, is_bool, is_text, is_float,
+                                is_instance_factory,is_one_of_factory)
 from pandas.core.format import detect_console_encoding
 
 """
@@ -117,16 +118,74 @@ pc_line_width_doc = """
 : int
     When printing wide DataFrames, this is the width of each line.
 """
+
 pc_chop_threshold_doc = """
 : float or None
     if set to a float value, all float values smaller then the given threshold
     will be displayed as exactly 0 by repr and friends.
 """
 
+pc_max_seq_items = """
+: int or None
+
+    when pretty-printing a long sequence, no more then `max_seq_items`
+    will be printed. If items are ommitted, they will be denoted by the addition
+    of "..." to the resulting string.
+
+    If set to None, the number of items to be printed is unlimited.
+"""
+
+
+pc_max_info_rows_doc = """
+: int or None
+    max_info_rows is the maximum number of rows for which a frame will
+    perform a null check on its columns when repr'ing To a console.
+    The default is 1,000,000 rows. So, if a DataFrame has more
+    1,000,000 rows there will be no null check performed on the
+    columns and thus the representation will take much less time to
+    display in an interactive session. A value of None means always
+    perform a null check when repr'ing.
+"""
+
+pc_mpl_style_doc = """
+: bool
+
+    Setting this to 'default' will modify the rcParams used by matplotlib
+    to give plots a more pleasing visual style by default.
+    Setting this to None/False restores the values to their initial value.
+"""
+
+style_backup = dict()
+def mpl_style_cb(key):
+    import sys
+    from pandas.tools.plotting import mpl_stylesheet
+    global style_backup
+
+    val = cf.get_option(key)
+
+    if 'matplotlib' not in sys.modules.keys():
+        if not(val): # starting up, we get reset to None
+            return val
+        raise Exception("matplotlib has not been imported. aborting")
+
+    import matplotlib.pyplot as plt
+
+
+    if val == 'default':
+        style_backup = dict([(k,plt.rcParams[k]) for k in mpl_stylesheet])
+        plt.rcParams.update(mpl_stylesheet)
+    elif not val:
+        if style_backup:
+            plt.rcParams.update(style_backup)
+
+    return val
+
 with cf.config_prefix('display'):
     cf.register_option('precision', 7, pc_precision_doc, validator=is_int)
     cf.register_option('float_format', None, float_format_doc)
     cf.register_option('column_space', 12, validator=is_int)
+    cf.register_option('max_info_rows', 1000000, pc_max_info_rows_doc,
+                       validator=is_instance_factory((int, type(None))))
     cf.register_option('max_rows', 100, pc_max_rows_doc, validator=is_int)
     cf.register_option('max_colwidth', 50, max_colwidth_doc, validator=is_int)
     cf.register_option('max_columns', 20, pc_max_cols_doc, validator=is_int)
@@ -149,6 +208,10 @@ with cf.config_prefix('display'):
     cf.register_option('expand_frame_repr', True, pc_expand_repr_doc)
     cf.register_option('line_width', 80, pc_line_width_doc)
     cf.register_option('chop_threshold', None, pc_chop_threshold_doc)
+    cf.register_option('max_seq_items', None, pc_max_seq_items)
+    cf.register_option('mpl_style', None, pc_mpl_style_doc,
+                       validator=is_one_of_factory([None, False, 'default']),
+                       cb=mpl_style_cb)
 
 tc_sim_interactive_doc = """
 : boolean

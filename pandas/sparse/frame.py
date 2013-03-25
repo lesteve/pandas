@@ -10,6 +10,7 @@ import numpy as np
 
 from pandas.core.common import _pickle_array, _unpickle_array, _try_sort
 from pandas.core.index import Index, MultiIndex, _ensure_index
+from pandas.core.indexing import _check_slice_bounds, _maybe_convert_indices
 from pandas.core.series import Series
 from pandas.core.frame import (DataFrame, extract_index, _prep_ndarray,
                                _default_index)
@@ -42,6 +43,11 @@ class _SparseMockBlockManager(object):
     def axes(self):
         return [self.sp_frame.columns, self.sp_frame.index]
 
+    @property
+    def blocks(self):
+        """ return our series in the column order """
+        s = self.sp_frame._series
+        return [ self.iget(i) for i in self.sp_frame.columns ]
 
 class SparseDataFrame(DataFrame):
     """
@@ -60,7 +66,6 @@ class SparseDataFrame(DataFrame):
         Default fill_value for converting Series to SparseSeries. Will not
         override SparseSeries passed in
     """
-    _verbose_info = False
     _columns = None
     _series = None
     _is_mixed_type = False
@@ -235,6 +240,13 @@ class SparseDataFrame(DataFrame):
         data = dict((k, v.to_dense()) for k, v in self.iteritems())
         return DataFrame(data, index=self.index)
 
+    def get_dtype_counts(self):
+        from collections import defaultdict
+        d = defaultdict(int)
+        for k, v in self.iteritems():
+            d[v.dtype.name] += 1
+        return Series(d)
+     
     def astype(self, dtype):
         raise NotImplementedError
 
@@ -404,11 +416,15 @@ class SparseDataFrame(DataFrame):
         return dense.to_sparse(kind=self.default_kind,
                                fill_value=self.default_fill_value)
 
-    def _slice(self, slobj, axis=0):
+    def _slice(self, slobj, axis=0, raise_on_error=False):
         if axis == 0:
+            if raise_on_error:
+                _check_slice_bounds(slobj, self.index)
             new_index = self.index[slobj]
             new_columns = self.columns
         else:
+            if raise_on_error:
+                _check_slice_bounds(slobj, self.columns)
             new_index = self.index
             new_columns = self.columns[slobj]
 
@@ -618,7 +634,7 @@ class SparseDataFrame(DataFrame):
         self.columns = new_columns
         self._series = new_series
 
-    def take(self, indices, axis=0):
+    def take(self, indices, axis=0, convert=True):
         """
         Analogous to ndarray.take, return SparseDataFrame corresponding to
         requested indices along an axis
@@ -627,12 +643,20 @@ class SparseDataFrame(DataFrame):
         ----------
         indices : list / array of ints
         axis : {0, 1}
+        convert : convert indices for negative values, check bounds, default True
+                  mainly useful for an user routine calling
 
         Returns
         -------
         taken : SparseDataFrame
         """
+
         indices = com._ensure_platform_int(indices)
+
+        # check/convert indicies here
+        if convert:
+            indices = _maybe_convert_indices(indices, len(self._get_axis(axis)))
+
         new_values = self.values.take(indices, axis=axis)
         if axis == 0:
             new_columns = self.columns

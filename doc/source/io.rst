@@ -37,6 +37,9 @@ The two workhorse functions for reading text files (a.k.a. flat files) are
 They both use the same parsing code to intelligently convert tabular
 data into a DataFrame object. They can take a number of arguments:
 
+See some :ref:`cookbook examples <cookbook.csv>` for some advanced strategies
+See some :ref:`cookbook examples <cookbook.csv>` for some advanced strategies
+
   - ``filepath_or_buffer``: Either a string path to a file, or any object with a
     ``read`` method (such as an open file or ``StringIO``).
   - ``sep`` or ``delimiter``: A delimiter / separator to split fields
@@ -105,6 +108,7 @@ data into a DataFrame object. They can take a number of arguments:
     unicode data, e.g. ``'utf-8``` or ``'latin-1'``.
   - ``verbose``: show number of NA values inserted in non-numeric columns
   - ``squeeze``: if True then output with only one column is turned into Series
+  - ``error_bad_lines``: if False then any lines causing an error will be skipped :ref:`bad lines <io.bad_lines>`
 
 .. ipython:: python
    :suppress:
@@ -906,12 +910,16 @@ And then import the data directly to a DataFrame by calling:
    clipdf
 
 
+.. _io.excel:
+
 Excel files
 -----------
 
 The ``ExcelFile`` class can read an Excel 2003 file using the ``xlrd`` Python
 module and use the same parsing code as the above to convert tabular data into
 a DataFrame. To use it, create the ``ExcelFile`` object:
+
+See some :ref:`cookbook examples <cookbook.excel>` for some advanced strategies
 
 .. code-block:: python
 
@@ -970,7 +978,7 @@ one can use the ExcelWriter class, as in the following example:
    df2.to_excel(writer, sheet_name='sheet2')
    writer.save()
 
-.. _io-hdf5:
+.. _io.hdf5:
 
 HDF5 (PyTables)
 ---------------
@@ -978,6 +986,8 @@ HDF5 (PyTables)
 ``HDFStore`` is a dict-like object which reads and writes pandas using
 the high performance HDF5 format using the excellent `PyTables
 <http://www.pytables.org/>`__ library.
+
+See some :ref:`cookbook examples <cookbook.hdf>` for some advanced strategies
 
 .. ipython:: python
    :suppress:
@@ -1058,6 +1068,7 @@ These stores are **not** appendable once written (though you can simply
 remove them and rewrite). Nor are they **queryable**; they must be
 retrieved in their entirety.
 
+.. _io.hdf5-table:
 
 Storing in Table format
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -1091,6 +1102,8 @@ supported.
    # the type of stored data
    store.root.df._v_attrs.pandas_type
 
+.. _io.hdf5-keys:
+
 Hierarchical Keys
 ~~~~~~~~~~~~~~~~~
 
@@ -1115,6 +1128,8 @@ everying in the sub-store and BELOW, so be *careful*.
    store.remove('food')
    store
 
+.. _io.hdf5-types:
+
 Storing Mixed Types in a Table
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1131,11 +1146,14 @@ defaults to `nan`.
 
 .. ipython:: python
 
-    df_mixed             = df.copy()
-    df_mixed['string']   = 'string'
-    df_mixed['int']      = 1
-    df_mixed['bool']     = True
-    df_mixed['datetime64'] = Timestamp('20010102')
+    df_mixed = DataFrame({ 'A' : randn(8),
+                           'B' : randn(8),
+                           'C' : np.array(randn(8),dtype='float32'),
+                           'string' :'string',
+                           'int' : 1,
+                           'bool' : True,
+                           'datetime64' : Timestamp('20010102')},
+                         index=range(8))
     df_mixed.ix[3:5,['A', 'B', 'string', 'datetime64']] = np.nan
 
     store.append('df_mixed', df_mixed, min_itemsize = {'values': 50})
@@ -1170,6 +1188,8 @@ storing/selecting from homogeneous index DataFrames.
         store.select('df_mi', Term('foo=bar'))
 
 
+.. _io.hdf5-query:
+
 Querying a Table
 ~~~~~~~~~~~~~~~~
 
@@ -1186,7 +1206,7 @@ A query is specified using the ``Term`` class under the hood.
 
 Valid terms can be created from ``dict, list, tuple, or
 string``. Objects can be embeded as values. Allowed operations are: ``<,
-<=, >, >=, =``. ``=`` will be inferred as an implicit set operation
+<=, >, >=, =, !=``. ``=`` will be inferred as an implicit set operation
 (e.g. if 2 or more values are provided). The following are all valid
 terms.
 
@@ -1295,6 +1315,23 @@ you cannot change data columns (nor indexables) after the first
 append/put operation (Of course you can simply read in the data and
 create a new table!)
 
+Iterator
+~~~~~~~~
+
+Starting in 0.11, you can pass, ``iterator=True`` or ``chunksize=number_in_a_chunk``
+to ``select`` and ``select_as_multiple`` to return an iterator on the results.
+The default is 50,000 rows returned in a chunk.
+
+.. ipython:: python
+
+   for df in store.select('df', chunksize=3):
+      print df
+
+Note, that the chunksize keyword applies to the **returned** rows. So if you
+are doing a query, then that set will be subdivided and returned in the
+iterator. Keep in mind that if you do not pass a ``where`` selection criteria
+then the ``nrows`` of the table are considered.
+
 Advanced Queries
 ~~~~~~~~~~~~~~~~
 
@@ -1372,6 +1409,7 @@ table (optional) to let it have the remaining columns. The argument
    store.select_as_multiple(['df1_mt', 'df2_mt'], where=['A>0', 'B>0'],
                              selector = 'df1_mt')
 
+.. _io.hdf5-delete:
 
 Delete from a Table
 ~~~~~~~~~~~~~~~~~~~
@@ -1435,8 +1473,7 @@ may not be installed (by Python) by default.
 
 Compression for all objects within the file
 
-   - ``store_compressed = HDFStore('store_compressed.h5', complevel=9,
-                                    complib='blosc')``
+   - ``store_compressed = HDFStore('store_compressed.h5', complevel=9, complib='blosc')``
 
 Or on-the-fly compression (this only applies to tables). You can turn
 off file compression for a specific table by passing ``complevel=0``
@@ -1451,8 +1488,7 @@ beginning. You can use the supplied ``PyTables`` utility
 ``ptrepack``. In addition, ``ptrepack`` can change compression levels
 after the fact.
 
-   - ``ptrepack --chunkshape=auto --propindexes --complevel=9
-       --complib=blosc in.h5 out.h5``
+   - ``ptrepack --chunkshape=auto --propindexes --complevel=9 --complib=blosc in.h5 out.h5``
 
 Furthermore ``ptrepack in.h5 out.h5`` will *repack* the file to allow
 you to reuse previously deleted space. Aalternatively, one can simply
@@ -1463,6 +1499,10 @@ Notes & Caveats
 
    - Once a ``table`` is created its items (Panel) / columns (DataFrame)
      are fixed; only exactly the same columns can be appended
+   - If a row has ``np.nan`` for **EVERY COLUMN** (having a ``nan``
+     in a string, or a ``NaT`` in a datetime-like column counts as having
+     a value), then those rows **WILL BE DROPPED IMPLICITLY**. This limitation
+     *may* be addressed in the future.
    - You can not append/select/delete to a non-table (table creation is
      determined on the first append, or by passing ``table=True`` in a
      put operation)
@@ -1488,13 +1528,13 @@ Notes & Caveats
 
      .. ipython:: python
 
-     store.append('wp_big_strings', wp, min_itemsize = { 'minor_axis' : 30 })
-     wp = wp.rename_axis(lambda x: x + '_big_strings', axis=2)
-     store.append('wp_big_strings', wp)
-     store.select('wp_big_strings')
+       store.append('wp_big_strings', wp, min_itemsize = { 'minor_axis' : 30 })
+       wp = wp.rename_axis(lambda x: x + '_big_strings', axis=2)
+       store.append('wp_big_strings', wp)
+       store.select('wp_big_strings')
 
-     # we have provided a minimum minor_axis indexable size
-     store.root.wp_big_strings.table
+       # we have provided a minimum minor_axis indexable size
+       store.root.wp_big_strings.table
 
 DataTypes
 ~~~~~~~~~
@@ -1658,6 +1698,8 @@ facilitate data retrieval and to reduce dependency on DB-specific API. There
 wrappers only support the Python database adapters which respect the `Python
 DB-API <http://www.python.org/dev/peps/pep-0249/>`_.
 
+See some :ref:`cookbook examples <cookbook.sql>` for some advanced strategies
+
 Suppose you want to query some data with different types from a table such as:
 
 +-----+------------+-------+-------+-------+
@@ -1700,9 +1742,9 @@ engine. You can use a temporary SQLite database where data are stored in
                                    Col_2 float,
                                    Col_3 bool);""")
    cu.executemany('INSERT INTO data VALUES (?,?,?,?,?)',
-                  [(26, datetime(2010,10,18), 'X', 27.5, True),
-                   (42, datetime(2010,10,19), 'Y', -12.5, False),
-                   (63, datetime(2010,10,20), 'Z', 5.73, True)])
+                  [(26, datetime.datetime(2010,10,18), 'X', 27.5, True),
+                   (42, datetime.datetime(2010,10,19), 'Y', -12.5, False),
+                   (63, datetime.datetime(2010,10,20), 'Z', 5.73, True)])
 
 
 Let ``data`` be the name of your SQL table. With a query and your database

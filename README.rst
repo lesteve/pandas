@@ -73,6 +73,12 @@ Dependencies
   * `pytz <http://pytz.sourceforge.net/>`__
      * Needed for time zone support with ``date_range``
 
+Highly Recommended Dependencies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  * `numexpr <http://code.google.com/p/numexpr/>`__: to accelerate some expression evaluation operations
+       also required by `PyTables`
+  * `bottleneck <http://berkeleyanalytics.com/bottleneck>`__: to accelerate certain numerical operations
+
 Optional dependencies
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -91,9 +97,24 @@ Optional dependencies
 Installation from sources
 =========================
 
-In the ``pandas`` directory (same one where you found this file), execute::
+To install pandas from source you need ``cython`` in addition to the normal dependencies above,
+which can be installed from pypi::
+
+    pip install cython
+
+In the ``pandas`` directory (same one where you found this file after cloning the git repo), execute::
 
     python setup.py install
+
+or for installing in `development mode <http://www.pip-installer.org/en/latest/usage.html>`__::
+
+    python setup.py develop
+
+Alternatively, you can use `pip` if you want all the dependencies pulled in automatically
+(the optional ``-e`` option is for installing it in
+`development mode <http://www.pip-installer.org/en/latest/usage.html>`__)::
+
+    pip install -e .
 
 On Windows, you will need to install MinGW and execute::
 

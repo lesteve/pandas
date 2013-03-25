@@ -115,7 +115,7 @@ def get_quote_yahoo(symbols):
         return None
 
     for line in lines:
-        fields = line.strip().split(',')
+        fields = line.decode('utf-8').strip().split(',')
         for i, field in enumerate(fields):
             if field[-2:] == '%"':
                 data[header[i]].append(float(field.strip('"%')))
@@ -133,7 +133,7 @@ def get_quote_yahoo(symbols):
 
 
 def _get_hist_yahoo(sym=None, start=None, end=None, retry_count=3,
-                    pause=0):
+                    pause=0, **kwargs):
     """
     Get historical data for the given name from yahoo.
     Date format is datetime
@@ -195,11 +195,22 @@ def _adjust_prices(hist_data, price_list=['Open', 'High', 'Low', 'Close']):
 
 def _calc_return_index(price_df):
     """
-    Return a returns index from a input price df or series.
+    Return a returns index from a input price df or series. Initial value
+    (typically NaN) is set to 1.
     """
+    df = price_df.pct_change().add(1).cumprod()
+    mask = ~df.ix[1].isnull() & df.ix[0].isnull()
+    df.ix[0][mask] = 1
 
-    ret_index =  price_df.pct_change().add(1).cumprod()
-    ret_index.ix[0] = 1
+    #Check for first stock listings after starting date of index in ret_index
+    #If True, find first_valid_index and set previous entry to 1.
+    if(~mask).any():
+        for sym in mask.index[~mask]:
+            tstamp = df[sym].first_valid_index()
+            t_idx = df.index.get_loc(tstamp) - 1
+            df[sym].ix[t_idx] = 1
+
+    ret_index = df
     return ret_index
 
 
@@ -241,7 +252,7 @@ def get_components_yahoo(idx_sym):
     #break when no new components are found
     while (True in mask):
         urlStr = url.format(idx_mod, stats,  comp_idx)
-        lines = (urllib.urlopen(urlStr).read().strip().
+        lines = (urllib.urlopen(urlStr).read().decode('utf-8').strip().
                  strip('"').split('"\r\n"'))
 
         lines = [line.strip().split('","') for line in lines]
@@ -258,7 +269,8 @@ def get_components_yahoo(idx_sym):
 
 
 def get_data_yahoo(symbols=None, start=None, end=None, retry_count=3, pause=0,
-                   adjust_price=False, ret_index=False, chunksize=25, **kwargs):
+                   adjust_price=False, ret_index=False, chunksize=25,
+                   **kwargs):
     """
     Returns DataFrame/Panel of historical stock prices from symbols, over date
     range, start to end. To avoid being penalized by Yahoo! Finance servers,
@@ -266,8 +278,8 @@ def get_data_yahoo(symbols=None, start=None, end=None, retry_count=3, pause=0,
 
     Parameters
     ----------
-    symbols : string, list-like object (list, tupel, Series), or DataFrame
-        Single stock symbol (ticker), list-like object of symbols or
+    symbols : string, array-like object (list, tuple, Series), or DataFrame
+        Single stock symbol (ticker), array-like object of symbols or
         DataFrame with index containing stock symbols.
     start : string, (defaults to '1/1/2010')
         Starting date, timestamp. Parses many different kind of date
@@ -290,7 +302,7 @@ def get_data_yahoo(symbols=None, start=None, end=None, retry_count=3, pause=0,
 
     Returns
     -------
-    hist_data : DataFrame (str) or Panel (list-like object, DataFrame)
+    hist_data : DataFrame (str) or Panel (array-like object, DataFrame)
     """
 
     def dl_mult_symbols(symbols):
@@ -444,7 +456,8 @@ class Options(object):
 
     # Fetch call and put data with expiry from now to 8 months out
     >>> forward_calls, forward_puts = aapl.get_forward_data(8,
-        ...                                        call=True, put=True)
+    ...                                              call=True, put=True)
+
     """
 
     def __init__(self, symbol):
@@ -857,12 +870,11 @@ class Options(object):
         if put:
             all_puts = DataFrame()
             for mon in range(months):
+                m2 = in_months[mon]
+                y2 = in_years[mon]
                 try:  # This catches cases when there isn't data for a month
                     if not near:
                         try:  # Try to access the ivar if already instantiated
-                            m2 = in_months[mon]
-                            y2 = in_years[mon]
-
                             m1 = m2 if len(str(m2)) == 2 else '0' + str(m2)
                             name = 'puts' + str(m1) + str(y2)[2:]
                             put_frame = self.__getattribute__(name)
@@ -873,7 +885,8 @@ class Options(object):
                     else:
                         put_frame = self.get_near_stock_price(call=False,
                                                               put=True,
-                                                    above_below=above_below)
+                                                    above_below=above_below,
+                                                    month=m2, year=y2)
 
                     # Add column with expiry data to this frame.
                     tick = str(put_frame.Symbol[0])

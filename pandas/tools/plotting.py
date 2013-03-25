@@ -23,6 +23,71 @@ try:  # mpl optional
 except ImportError:
     pass
 
+# Extracted from https://gist.github.com/huyng/816622
+# this is the rcParams set when setting display.with_mpl_style
+# to True.
+mpl_stylesheet = {
+    'axes.axisbelow': True,
+     'axes.color_cycle': ['#348ABD',
+      '#7A68A6',
+      '#A60628',
+      '#467821',
+      '#CF4457',
+      '#188487',
+      '#E24A33'],
+     'axes.edgecolor': '#bcbcbc',
+     'axes.facecolor': '#eeeeee',
+     'axes.grid': True,
+     'axes.labelcolor': '#555555',
+     'axes.labelsize': 'large',
+     'axes.linewidth': 1.0,
+     'axes.titlesize': 'x-large',
+     'figure.edgecolor': 'white',
+     'figure.facecolor': 'white',
+     'figure.figsize': (6.0, 4.0),
+     'figure.subplot.hspace': 0.5,
+     'font.family': 'monospace',
+     'font.monospace': ['Andale Mono',
+      'Nimbus Mono L',
+      'Courier New',
+      'Courier',
+      'Fixed',
+      'Terminal',
+      'monospace'],
+     'font.size': 10,
+     'interactive': True,
+     'keymap.all_axes': ['a'],
+     'keymap.back': ['left', 'c', 'backspace'],
+     'keymap.forward': ['right', 'v'],
+     'keymap.fullscreen': ['f'],
+     'keymap.grid': ['g'],
+     'keymap.home': ['h', 'r', 'home'],
+     'keymap.pan': ['p'],
+     'keymap.save': ['s'],
+     'keymap.xscale': ['L', 'k'],
+     'keymap.yscale': ['l'],
+     'keymap.zoom': ['o'],
+     'legend.fancybox': True,
+     'lines.antialiased': True,
+     'lines.linewidth': 1.0,
+     'patch.antialiased': True,
+     'patch.edgecolor': '#EEEEEE',
+     'patch.facecolor': '#348ABD',
+     'patch.linewidth': 0.5,
+     'toolbar': 'toolbar2',
+     'xtick.color': '#555555',
+     'xtick.direction': 'in',
+     'xtick.major.pad': 6.0,
+     'xtick.major.size': 0.0,
+     'xtick.minor.pad': 6.0,
+     'xtick.minor.size': 0.0,
+     'ytick.color': '#555555',
+     'ytick.direction': 'in',
+     'ytick.major.pad': 6.0,
+     'ytick.major.size': 0.0,
+     'ytick.minor.pad': 6.0,
+     'ytick.minor.size': 0.0
+}
 
 def _get_standard_kind(kind):
     return {'density': 'kde'}.get(kind, kind)
@@ -154,49 +219,42 @@ def scatter_matrix(frame, alpha=0.5, figsize=None, ax=None, grid=False,
             ax.set_xlabel('')
             ax.set_ylabel('')
 
-            ax.xaxis.set_visible(False)
-            ax.yaxis.set_visible(False)
+            _label_axis(ax, kind='x', label=b, position='bottom', rotate=True)
 
-            # setup labels
-            if i == 0 and j % 2 == 1:
-                ax.set_xlabel(b, visible=True)
-                ax.xaxis.set_visible(True)
-                ax.set_xlabel(b)
-                ax.xaxis.set_ticks_position('top')
-                ax.xaxis.set_label_position('top')
-                setp(ax.get_xticklabels(), rotation=90)
-            elif i == n - 1 and j % 2 == 0:
-                ax.set_xlabel(b, visible=True)
-                ax.xaxis.set_visible(True)
-                ax.set_xlabel(b)
-                ax.xaxis.set_ticks_position('bottom')
-                ax.xaxis.set_label_position('bottom')
-                setp(ax.get_xticklabels(), rotation=90)
-            elif j == 0 and i % 2 == 0:
-                ax.set_ylabel(a, visible=True)
-                ax.yaxis.set_visible(True)
-                ax.set_ylabel(a)
-                ax.yaxis.set_ticks_position('left')
-                ax.yaxis.set_label_position('left')
-            elif j == n - 1 and i % 2 == 1:
-                ax.set_ylabel(a, visible=True)
-                ax.yaxis.set_visible(True)
-                ax.set_ylabel(a)
-                ax.yaxis.set_ticks_position('right')
-                ax.yaxis.set_label_position('right')
+            _label_axis(ax, kind='y', label=a, position='left')
 
-            # ax.grid(b=grid)
-
-    axes[0, 0].yaxis.set_visible(False)
-    axes[n - 1, n - 1].xaxis.set_visible(False)
-    axes[n - 1, n - 1].yaxis.set_visible(False)
-    axes[0, n - 1].yaxis.tick_right()
+            if j!= 0:
+                ax.yaxis.set_visible(False)
+            if i != n-1:
+                ax.xaxis.set_visible(False)
 
     for ax in axes.flat:
         setp(ax.get_xticklabels(), fontsize=8)
         setp(ax.get_yticklabels(), fontsize=8)
 
     return axes
+
+def _label_axis(ax, kind='x', label='', position='top',
+    ticks=True, rotate=False):
+    
+    from matplotlib.artist import setp
+    if kind == 'x':
+        ax.set_xlabel(label, visible=True)
+        ax.xaxis.set_visible(True)
+        ax.xaxis.set_ticks_position(position)
+        ax.xaxis.set_label_position(position)
+        if rotate:
+            setp(ax.get_xticklabels(), rotation=90)
+    elif kind == 'y':
+        ax.yaxis.set_visible(True)
+        ax.set_ylabel(label, visible=True)        
+        # ax.set_ylabel(a)
+        ax.yaxis.set_ticks_position(position)
+        ax.yaxis.set_label_position(position)
+    return        
+    
+        
+    
 
 
 def _gca():
@@ -1043,7 +1101,7 @@ class LinePlot(MPLPlot):
             if (base <= freqmod.FreqGroup.FR_DAY):
                 return x[:1].is_normalized
 
-            return Period(x[0], freq).to_timestamp() == x[0]
+            return Period(x[0], freq).to_timestamp(tz=x.tz) == x[0]
         return True
 
     def _use_dynamic_x(self):
@@ -1279,8 +1337,17 @@ class BarPlot(MPLPlot):
 
         return f
 
+    def _get_colors(self):
+        import matplotlib.pyplot as plt
+        cycle = plt.rcParams.get('axes.color_cycle', list('bgrcmyk'))
+        if isinstance(cycle, basestring):
+            cycle = list(cycle)
+        has_colors = 'color' in self.kwds
+        colors = self.kwds.get('color', cycle)
+        return colors
+
     def _make_plot(self):
-        colors = self.kwds.pop('color', 'brgyk')
+        colors = self._get_colors()
         rects = []
         labels = []
 
@@ -1385,7 +1452,7 @@ def plot_frame(frame=None, x=None, y=None, subplots=False, sharex=True,
         Sort column names to determine plot ordering
     title : string
         Title to use for the plot
-    grid : boolean, default True
+    grid : boolean, default False
         Axis grid lines
     legend : boolean, default True
         Place legend on axis subplots
@@ -1393,9 +1460,10 @@ def plot_frame(frame=None, x=None, y=None, subplots=False, sharex=True,
     ax : matplotlib axis object, default None
     style : list or dict
         matplotlib line style per column
-    kind : {'line', 'bar', 'barh'}
+    kind : {'line', 'bar', 'barh', 'kde', 'density'}
         bar : vertical bar plot
         barh : horizontal bar plot
+        kde/density : Kernel Density Estimation plot
     logx : boolean, default False
         For line plots, use log scaling on x axis
     logy : boolean, default False
@@ -1473,31 +1541,32 @@ def plot_series(series, label=None, kind='line', use_index=True, rot=None,
     Parameters
     ----------
     label : label argument to provide to plot
-    kind : {'line', 'bar', 'barh'}
+    kind : {'line', 'bar', 'barh', 'kde', 'density'}
         bar : vertical bar plot
         barh : horizontal bar plot
-    rot : int, default 30
-        Rotation for tick labels
+        kde/density : Kernel Density Estimation plot
     use_index : boolean, default True
         Plot index as axis tick labels
-    ax : matplotlib axis object
-        If not passed, uses gca()
-    style : string, default matplotlib default
-        matplotlib line style to use
-    ax : matplotlib axis object
-        If not passed, uses gca()
-    logx : boolean, default False
-        For line plots, use log scaling on x axis
-    logy : boolean, default False
-        For line plots, use log scaling on y axis
+    rot : int, default None
+        Rotation for tick labels
     xticks : sequence
         Values to use for the xticks
     yticks : sequence
         Values to use for the yticks
     xlim : 2-tuple/list
     ylim : 2-tuple/list
-    rot : int, default None
-        Rotation for ticks
+    ax : matplotlib axis object
+        If not passed, uses gca()
+    style : string, default matplotlib default
+        matplotlib line style to use
+    grid : matplot grid
+    legend: matplot legende
+    logx : boolean, default False
+        For line plots, use log scaling on x axis
+    logy : boolean, default False
+        For line plots, use log scaling on y axis
+    secondary_y : boolean or sequence of ints, default False
+        If True then y-axis will be on the right
     kwds : keywords
         Options to pass to matplotlib plotting method
 
@@ -1634,7 +1703,7 @@ def format_date_labels(ax, rot):
         pass
 
 
-def scatter_plot(data, x, y, by=None, ax=None, figsize=None, grid=False):
+def scatter_plot(data, x, y, by=None, ax=None, figsize=None, grid=False, **kwargs):
     """
 
     Returns
@@ -1646,7 +1715,7 @@ def scatter_plot(data, x, y, by=None, ax=None, figsize=None, grid=False):
     def plot_group(group, ax):
         xvals = group[x].values
         yvals = group[y].values
-        ax.scatter(xvals, yvals)
+        ax.scatter(xvals, yvals, **kwargs)
         ax.grid(grid)
 
     if by is not None:

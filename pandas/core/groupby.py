@@ -13,6 +13,7 @@ from pandas.util.decorators import cache_readonly, Appender
 from pandas.util.compat import OrderedDict
 import pandas.core.algorithms as algos
 import pandas.core.common as com
+from pandas.core.common import _possibly_downcast_to_dtype
 
 import pandas.lib as lib
 import pandas.algos as _algos
@@ -57,6 +58,8 @@ def _groupby_function(name, alias, npfunc, numeric_only=True,
     def f(self):
         try:
             return self._cython_agg_general(alias, numeric_only=numeric_only)
+        except AssertionError as e:
+            raise SpecificationError(str(e))
         except Exception:
             result = self.aggregate(lambda x: npfunc(x, axis=self.axis))
             if _convert:
@@ -348,7 +351,7 @@ class GroupBy(object):
         """
         try:
             return self._cython_agg_general('mean')
-        except DataError:
+        except GroupByError:
             raise
         except Exception:  # pragma: no cover
             f = lambda x: x.mean(axis=self.axis)
@@ -362,7 +365,7 @@ class GroupBy(object):
         """
         try:
             return self._cython_agg_general('median')
-        except DataError:
+        except GroupByError:
             raise
         except Exception:  # pragma: no cover
             f = lambda x: x.median(axis=self.axis)
@@ -438,14 +441,7 @@ class GroupBy(object):
                 
                 # need to respect a non-number here (e.g. Decimal)
                 if len(result) and issubclass(type(result[0]),(np.number,float,int)):
-                    if issubclass(dtype.type, (np.integer, np.bool_)):
-
-                        # castable back to an int/bool as we don't have nans
-                        if com.notnull(result).all():
-                            result = result.astype(dtype)
-                    else:
-
-                        result = result.astype(dtype)
+                    result = _possibly_downcast_to_dtype(result, dtype)
 
             elif issubclass(dtype.type, np.datetime64):
                 if is_datetime64_dtype(obj.dtype):
@@ -462,8 +458,11 @@ class GroupBy(object):
             if numeric_only and not is_numeric:
                 continue
 
-            result, names = self.grouper.aggregate(obj.values, how)
-            output[name] = result
+            try:
+                result, names = self.grouper.aggregate(obj.values, how)
+            except AssertionError as e:
+                raise GroupByError(str(e))
+            output[name] = self._try_cast(result, obj)
 
         if len(output) == 0:
             raise DataError('No numeric types to aggregate')
@@ -897,7 +896,7 @@ class Grouper(object):
         dummy = obj[:0].copy()
         indexer = _algos.groupsort_indexer(group_index, ngroups)[0]
         obj = obj.take(indexer)
-        group_index = com.ndtake(group_index, indexer)
+        group_index = com.take_nd(group_index, indexer, allow_fill=False)
         grouper = lib.SeriesGrouper(obj, func, group_index, ngroups,
                                     dummy)
         result, counts = grouper.get_result()
@@ -1200,6 +1199,13 @@ class Grouping(object):
             # no level passed
             if not isinstance(self.grouper, np.ndarray):
                 self.grouper = self.index.map(self.grouper)
+                if not (hasattr(self.grouper,"__len__") and \
+                   len(self.grouper) == len(self.index)):
+                    errmsg = "Grouper result violates len(labels) == len(data)\n"
+                    errmsg += "result: %s" % com.pprint_thing(self.grouper)
+                    self.grouper = None # Try for sanity
+                    raise AssertionError(errmsg)
+
 
     def __repr__(self):
         return 'Grouping(%s)' % self.name
@@ -1310,6 +1316,11 @@ def _get_grouper(obj, key=None, axis=0, level=None, sort=True):
             exclusions.append(gpr)
             name = gpr
             gpr = obj[gpr]
+
+        if (isinstance(gpr,Categorical) and len(gpr) != len(obj)):
+            errmsg = "Categorical grouper must have len(grouper) == len(data)"
+            raise AssertionError(errmsg)
+
         ping = Grouping(group_axis, gpr, name=name, level=level, sort=sort)
         groupings.append(ping)
 
@@ -1594,6 +1605,10 @@ class NDFrameGroupBy(GroupBy):
                 values = com.ensure_float(values)
 
             result, _ = self.grouper.aggregate(values, how, axis=agg_axis)
+
+            # see if we can cast the block back to the original dtype
+            result = block._try_cast_result(result)
+
             newb = make_block(result, block.items, block.ref_items)
             new_blocks.append(newb)
 
@@ -1686,7 +1701,9 @@ class NDFrameGroupBy(GroupBy):
                 zipped = zip(result.index.levels, result.index.labels,
                              result.index.names)
                 for i, (lev, lab, name) in enumerate(zipped):
-                    result.insert(i, name, com.ndtake(lev.values, lab))
+                    result.insert(i, name,
+                                  com.take_nd(lev.values, lab,
+                                              allow_fill=False))
                 result = result.consolidate()
             else:
                 values = result.index.values
@@ -1712,9 +1729,10 @@ class NDFrameGroupBy(GroupBy):
                                      grouper=self.grouper)
                 results.append(colg.aggregate(arg))
                 keys.append(col)
-            except (TypeError, DataError):
+            except (TypeError, DataError) :
                 pass
-
+            except SpecificationError:
+                raise
         result = concat(results, keys=keys, axis=1)
 
         return result
@@ -1821,18 +1839,28 @@ class NDFrameGroupBy(GroupBy):
                     return self._concat_objects(keys, values,
                                                 not_indexed_same=not_indexed_same)
 
-                if self.axis == 0:
-                    stacked_values = np.vstack([np.asarray(x)
-                                                for x in values])
-                    columns = values[0].index
-                    index = key_index
-                else:
-                    stacked_values = np.vstack([np.asarray(x)
+                try:
+                    if self.axis == 0:
+
+                        stacked_values = np.vstack([np.asarray(x)
+                                                    for x in values])
+                        columns = values[0].index
+                        index = key_index
+                    else:
+                        stacked_values = np.vstack([np.asarray(x)
                                                 for x in values]).T
-                    index = values[0].index
-                    columns = key_index
+
+                        index = values[0].index
+                        columns = key_index
+
+                except ValueError:
+                    #GH1738,, values is list of arrays of unequal lengths
+                    # fall through to the outer else caluse
+                    return Series(values, index=key_index)
+
                 return DataFrame(stacked_values, index=index,
                                  columns=columns)
+
             else:
                 return Series(values, index=key_index)
         else:
@@ -2133,7 +2161,7 @@ class DataSplitter(object):
     @cache_readonly
     def slabels(self):
         # Sorted labels
-        return com.ndtake(self.labels, self.sort_idx)
+        return com.take_nd(self.labels, self.sort_idx, allow_fill=False)
 
     @cache_readonly
     def sort_idx(self):
@@ -2411,11 +2439,11 @@ def _reorder_by_uniques(uniques, labels):
     mask = labels < 0
 
     # move labels to right locations (ie, unsort ascending labels)
-    labels = com.ndtake(reverse_indexer, labels)
+    labels = com.take_nd(reverse_indexer, labels, allow_fill=False)
     np.putmask(labels, mask, -1)
 
     # sort observed ids
-    uniques = com.ndtake(uniques, sorter)
+    uniques = com.take_nd(uniques, sorter, allow_fill=False)
 
     return uniques, labels
 

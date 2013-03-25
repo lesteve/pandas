@@ -209,23 +209,26 @@ class _MergeOperation(object):
             if name in result:
                 key_col = result[name]
 
-                if name in self.left and left_indexer is not None:
-                    na_indexer = (left_indexer == -1).nonzero()[0]
-                    if len(na_indexer) == 0:
-                        continue
+                if left_indexer is not None and right_indexer is not None:
 
-                    right_na_indexer = right_indexer.take(na_indexer)
-                    key_col.put(
-                        na_indexer, com.take_1d(self.right_join_keys[i],
-                                                right_na_indexer))
-                elif name in self.right and right_indexer is not None:
-                    na_indexer = (right_indexer == -1).nonzero()[0]
-                    if len(na_indexer) == 0:
-                        continue
+                    if name in self.left:
+                        na_indexer = (left_indexer == -1).nonzero()[0]
+                        if len(na_indexer) == 0:
+                            continue
 
-                    left_na_indexer = left_indexer.take(na_indexer)
-                    key_col.put(na_indexer, com.take_1d(self.left_join_keys[i],
-                                                        left_na_indexer))
+                        right_na_indexer = right_indexer.take(na_indexer)
+                        key_col.put(
+                            na_indexer, com.take_1d(self.right_join_keys[i],
+                                                    right_na_indexer))
+                    elif name in self.right:
+                        na_indexer = (right_indexer == -1).nonzero()[0]
+                        if len(na_indexer) == 0:
+                            continue
+
+                        left_na_indexer = left_indexer.take(na_indexer)
+                        key_col.put(na_indexer, com.take_1d(self.left_join_keys[i],
+                                                            left_na_indexer))
+
             elif left_indexer is not None:
                 if name is None:
                     name = 'key_%d' % i
@@ -715,9 +718,7 @@ class _BlockJoinOperation(object):
         sofar = 0
         for unit, blk in merge_chunks:
             out_chunk = out[sofar: sofar + len(blk)]
-            com.take_fast(blk.values, unit.indexer,
-                          None, False, axis=self.axis,
-                          out=out_chunk)
+            com.take_nd(blk.values, unit.indexer, self.axis, out=out_chunk)
             sofar += len(blk)
 
         # does not sort
@@ -737,36 +738,24 @@ class _JoinUnit(object):
     @cache_readonly
     def mask_info(self):
         if self.indexer is None or not _may_need_upcasting(self.blocks):
-            mask = None
-            need_masking = False
+            return None
         else:
             mask = self.indexer == -1
-            need_masking = mask.any()
-
-        return mask, need_masking
-
-    @property
-    def need_masking(self):
-        return self.mask_info[1]
+            needs_masking = mask.any()
+            return (mask, needs_masking)
 
     def get_upcasted_blocks(self):
-        # will short-circuit and not compute lneed_masking if indexer is None
-        if self.need_masking:
+        # will short-circuit and not compute needs_masking if indexer is None
+        if self.mask_info is not None and self.mask_info[1]:
             return _upcast_blocks(self.blocks)
         return self.blocks
 
     def reindex_block(self, block, axis, ref_items, copy=True):
-        # still some inefficiency here for bool/int64 because in the case where
-        # no masking is needed, take_fast will recompute the mask
-
-        mask, need_masking = self.mask_info
-
         if self.indexer is None:
             result = block.copy() if copy else block
         else:
-            result = block.reindex_axis(self.indexer, mask, need_masking,
-                                        axis=axis)
-
+            result = block.reindex_axis(self.indexer, axis=axis,
+                                        mask_info=self.mask_info)
         result.ref_items = ref_items
         return result
 
@@ -958,9 +947,10 @@ class _Concatenator(object):
             name = com._consensus_name_attr(self.objs)
             return Series(new_data, index=self.new_axes[0], name=name)
         elif self._is_series:
-            data = dict(zip(self.new_axes[1], self.objs))
-            return DataFrame(data, index=self.new_axes[0],
-                             columns=self.new_axes[1])
+            data = dict(itertools.izip(xrange(len(self.objs)), self.objs))
+            tmpdf = DataFrame(data, index=self.new_axes[0])
+            tmpdf.columns = self.new_axes[1]
+            return tmpdf
         else:
             new_data = self._get_concatenated_data()
             return self.objs[0]._from_axes(new_data, self.new_axes)

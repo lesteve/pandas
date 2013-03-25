@@ -287,7 +287,7 @@ class TestMerge(unittest.TestCase):
         df1 = DataFrame({'A': 1., 'B': 2, 'C': 'foo', 'D': True},
                         index=np.arange(10),
                         columns=['A', 'B', 'C', 'D'])
-        self.assert_(df1['B'].dtype == np.int)
+        self.assert_(df1['B'].dtype == np.int64)
         self.assert_(df1['D'].dtype == np.bool_)
 
         df2 = DataFrame({'A': 1., 'B': 2, 'C': 'foo', 'D': True},
@@ -357,6 +357,7 @@ class TestMerge(unittest.TestCase):
         joined = df1.join(df2, how='outer')
         ex_index = index1._tuple_index + index2._tuple_index
         expected = df1.reindex(ex_index).join(df2.reindex(ex_index))
+        expected.index.names = index1.names
         assert_frame_equal(joined, expected)
         self.assertEqual(joined.index.names, index1.names)
 
@@ -366,6 +367,7 @@ class TestMerge(unittest.TestCase):
         joined = df1.join(df2, how='outer').sortlevel(0)
         ex_index = index1._tuple_index + index2._tuple_index
         expected = df1.reindex(ex_index).join(df2.reindex(ex_index))
+        expected.index.names = index1.names
 
         assert_frame_equal(joined, expected)
         self.assertEqual(joined.index.names, index1.names)
@@ -717,6 +719,24 @@ class TestMerge(unittest.TestCase):
 
         self.assert_((df.var3.unique() == result.var3.unique()).all())
 
+    def test_merge_nan_right(self):
+        df1 = DataFrame({"i1" : [0, 1], "i2" : [0, 1]})
+        df2 = DataFrame({"i1" : [0], "i3" : [0]})
+        result = df1.join(df2, on="i1", rsuffix="_")
+        expected = DataFrame({'i1': {0: 0.0, 1: 1}, 'i2': {0: 0, 1: 1},
+                              'i1_': {0: 0, 1: np.nan}, 'i3': {0: 0.0, 1: np.nan},
+                               None: {0: 0, 1: 0}}).set_index(None).reset_index()[['i1', 'i2', 'i1_', 'i3']]
+        assert_frame_equal(result, expected, check_dtype=False)
+
+        df1 = DataFrame({"i1" : [0, 1], "i2" : [0.5, 1.5]})
+        df2 = DataFrame({"i1" : [0], "i3" : [0.7]})
+        result = df1.join(df2, rsuffix="_", on='i1')
+        expected = DataFrame({'i1': {0: 0, 1: 1}, 'i1_': {0: 0.0, 1: nan},
+                              'i2': {0: 0.5, 1: 1.5}, 'i3': {0: 0.69999999999999996,
+                              1: nan}})[['i1', 'i2', 'i1_', 'i3']]
+        assert_frame_equal(result, expected)
+
+
     def test_overlapping_columns_error_message(self):
         # #2649
         df = DataFrame({'key': [1, 2, 3],
@@ -739,7 +759,7 @@ def _check_merge(x, y):
                          sort=True)
         expected = expected.set_index('index')
 
-        assert_frame_equal(result, expected)
+        assert_frame_equal(result, expected, check_names=False)  # TODO check_names on merge?
 
 
 class TestMergeMulti(unittest.TestCase):
@@ -1650,6 +1670,16 @@ class TestConcatenate(unittest.TestCase):
         right = concat([ts2, ts1], join='outer', axis=1)
 
         self.assertEqual(len(left), len(right))
+
+    def test_concat_bug_2972(self):
+        ts0 = Series(np.zeros(5))
+        ts1 = Series(np.ones(5))
+        ts0.name = ts1.name = 'same name'
+        result = concat([ts0, ts1], axis=1)
+
+        expected = DataFrame({0: ts0, 1: ts1})
+        expected.columns=['same name', 'same name']
+        assert_frame_equal(result, expected)
 
 
 class TestOrderedMerge(unittest.TestCase):

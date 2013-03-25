@@ -18,13 +18,10 @@ pip install $PIP_ARGS --use-mirrors cython nose python-dateutil pytz
 
 if [ ${TRAVIS_PYTHON_VERSION} == "3.2" ]; then
     sudo apt-get $APT_ARGS install python3-numpy;
-fi
-
-# or else, get it with pip and compile it
-if [ ${TRAVIS_PYTHON_VERSION} == "2.6" ]; then
-     pip $PIP_ARGS install numpy;
-elif [ ${TRAVIS_PYTHON_VERSION} == "3.3" ]; then # should be >=3,3
-    pip $PIP_ARGS install https://github.com/numpy/numpy/archive/v1.7.0rc1.tar.gz;
+elif [ ${TRAVIS_PYTHON_VERSION} == "3.3" ] || [  x"$LOCALE_OVERRIDE" != x""  ]; then # should be >=3,3
+    pip $PIP_ARGS install https://github.com/numpy/numpy/archive/v1.7.0.tar.gz;
+else
+     pip install numpy==1.6.1
 fi
 
 # Optional Deps
@@ -71,5 +68,8 @@ fi;
 
 # make sure the desired locale is generated
 if [ x"$LOCALE_OVERRIDE" != x"" ]; then
+    # piggyback this build for plotting tests. oh boy.
+    pip install $PIP_ARGS --use-mirrors  matplotlib;
+
     sudo locale-gen "$LOCALE_OVERRIDE"
 fi

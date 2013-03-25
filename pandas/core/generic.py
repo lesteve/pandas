@@ -3,6 +3,8 @@
 import numpy as np
 
 from pandas.core.index import MultiIndex
+import pandas.core.indexing as indexing
+from pandas.core.indexing import _maybe_convert_indices
 from pandas.tseries.index import DatetimeIndex
 import pandas.core.common as com
 import pandas.lib as lib
@@ -58,6 +60,21 @@ class PandasObject(object):
     def _get_axis(self, axis):
         name = self._get_axis_name(axis)
         return getattr(self, name)
+
+    #----------------------------------------------------------------------
+    # Indexers
+    @classmethod
+    def _create_indexer(cls, name, indexer):
+        """ create an indexer like _name in the class """
+        iname = '_%s' % name
+        setattr(cls,iname,None)
+
+        def _indexer(self):
+            if getattr(self,iname,None) is None:
+                setattr(self,iname,indexer(self, name))
+            return getattr(self,iname)
+
+        setattr(cls,name,property(_indexer))
 
     def abs(self):
         """
@@ -172,7 +189,7 @@ class PandasObject(object):
         """
         try:
             indexer = self.index.indexer_at_time(time, asof=asof)
-            return self.take(indexer)
+            return self.take(indexer, convert=False)
         except AttributeError:
             raise TypeError('Index must be DatetimeIndex')
 
@@ -196,7 +213,7 @@ class PandasObject(object):
             indexer = self.index.indexer_between_time(
                 start_time, end_time, include_start=include_start,
                 include_end=include_end)
-            return self.take(indexer)
+            return self.take(indexer, convert=False)
         except AttributeError:
             raise TypeError('Index must be DatetimeIndex')
 
@@ -212,15 +229,18 @@ class PandasObject(object):
         rule : the offset string or object representing target conversion
         how : string, method for down- or re-sampling, default to 'mean' for
               downsampling
-        fill_method : string, fill_method for upsampling, default None
         axis : int, optional, default 0
+        fill_method : string, fill_method for upsampling, default None
         closed : {'right', 'left'}, default None
             Which side of bin interval is closed
         label : {'right', 'left'}, default None
             Which bin edge label to label bucket with
         convention : {'start', 'end', 's', 'e'}
-        loffset : timedelta
+        kind: "period"/"timestamp"
+        loffset: timedelta
             Adjust the resampled time labels
+        limit: int, default None
+            Maximum size gap to when reindexing with fill_method
         base : int, default 0
             For frequencies that evenly subdivide 1 day, the "origin" of the
             aggregated intervals. For example, for '5min' frequency, base could
@@ -337,7 +357,7 @@ class PandasObject(object):
         dropped : type of caller
         """
         axis_name = self._get_axis_name(axis)
-        axis = self._get_axis(axis)
+        axis, axis_ = self._get_axis(axis), axis
 
         if axis.is_unique:
             if level is not None:
@@ -346,8 +366,13 @@ class PandasObject(object):
                 new_axis = axis.drop(labels, level=level)
             else:
                 new_axis = axis.drop(labels)
+            dropped = self.reindex(**{axis_name: new_axis})
+            try:
+                dropped.axes[axis_].names = axis.names
+            except AttributeError:
+                pass
+            return dropped
 
-            return self.reindex(**{axis_name: new_axis})
         else:
             if level is not None:
                 if not isinstance(axis, MultiIndex):
@@ -387,10 +412,6 @@ class PandasObject(object):
 
         new_axis = labels.take(sort_index)
         return self.reindex(**{axis_name: new_axis})
-
-    @property
-    def ix(self):
-        raise NotImplementedError
 
     def reindex(self, *args, **kwds):
         raise NotImplementedError
@@ -458,6 +479,9 @@ class PandasObject(object):
             np.putmask(rs.values, mask, np.nan)
         return rs
 
+# install the indexerse
+for _name, _indexer in indexing.get_indexers_list():
+    PandasObject._create_indexer(_name,_indexer)
 
 class NDFrame(PandasObject):
     """
@@ -583,6 +607,11 @@ class NDFrame(PandasObject):
         except KeyError:
             pass
 
+    def get_dtype_counts(self):
+        """ return the counts of dtypes in this frame """
+        from pandas import Series
+        return Series(self._data.get_dtype_counts())
+
     def pop(self, item):
         """
         Return item and drop from frame. Raise KeyError if not found.
@@ -642,8 +671,11 @@ class NDFrame(PandasObject):
 
     @property
     def _is_mixed_type(self):
-        self._consolidate_inplace()
-        return len(self._data.blocks) > 1
+        return self._data.is_mixed_type
+
+    @property
+    def _is_numeric_mixed_type(self):
+        return self._data.is_numeric_mixed_type
 
     def _reindex_axis(self, new_index, fill_method, axis, copy):
         new_data = self._data.reindex_axis(new_index, axis=axis,
@@ -902,7 +934,7 @@ class NDFrame(PandasObject):
 
         return self._constructor(new_data)
 
-    def take(self, indices, axis=0):
+    def take(self, indices, axis=0, convert=True):
         """
         Analogous to ndarray.take
 
@@ -910,17 +942,23 @@ class NDFrame(PandasObject):
         ----------
         indices : list / array of ints
         axis : int, default 0
+        convert : translate neg to pos indices (default)
 
         Returns
         -------
         taken : type of caller
         """
+
+        # check/convert indicies here
+        if convert:
+            indices = _maybe_convert_indices(indices, len(self._get_axis(axis)))
+
         if axis == 0:
             labels = self._get_axis(axis)
             new_items = labels.take(indices)
             new_data = self._data.reindex_axis(new_items, axis=0)
         else:
-            new_data = self._data.take(indices, axis=axis)
+            new_data = self._data.take(indices, axis=axis, verify=False)
         return self._constructor(new_data)
 
     def tz_convert(self, tz, axis=0, copy=True):

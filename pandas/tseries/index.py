@@ -298,7 +298,11 @@ class DatetimeIndex(Int64Index):
         if end is not None:
             end = Timestamp(end)
 
-        inferred_tz = tools._infer_tzinfo(start, end)
+        try:
+            inferred_tz = tools._infer_tzinfo(start, end)
+        except:
+            raise ValueError('Start and end cannot both be tz-aware with '
+                             'different timezones')
 
         if tz is not None and inferred_tz is not None:
             assert(inferred_tz == tz)
@@ -1038,9 +1042,6 @@ class DatetimeIndex(Int64Index):
             return self._view_like(left_chunk)
 
     def _partial_date_slice(self, reso, parsed):
-        if not self.is_monotonic:
-            raise TimeSeriesError('Partial indexing only valid for ordered '
-                                  'time series.')
 
         if reso == 'year':
             t1 = Timestamp(datetime(parsed.year, 1, 1), tz=self.tz)
@@ -1075,11 +1076,19 @@ class DatetimeIndex(Int64Index):
                                      tz=self.tz).value - 1)
         else:
             raise KeyError
+        
 
         stamps = self.asi8
-        left = stamps.searchsorted(t1.value, side='left')
-        right = stamps.searchsorted(t2.value, side='right')
-        return slice(left, right)
+
+        if self.is_monotonic:
+
+            # a monotonic (sorted) series can be sliced
+            left = stamps.searchsorted(t1.value, side='left')
+            right = stamps.searchsorted(t2.value, side='right')
+            return slice(left, right)
+
+        # try to find a the dates
+        return ((stamps>=t1.value) & (stamps<=t2.value)).nonzero()[0]
 
     def _possibly_promote(self, other):
         if other.inferred_type == 'date':
@@ -1538,17 +1547,21 @@ def _generate_regular_range(start, end, periods, offset):
             b = Timestamp(start).value
             e = Timestamp(end).value
             e += stride - e % stride
+            # end.tz == start.tz by this point due to _generate implementation
+            tz = start.tz
         elif start is not None:
             b = Timestamp(start).value
             e = b + periods * stride
+            tz = start.tz
         elif end is not None:
             e = Timestamp(end).value + stride
             b = e - periods * stride
+            tz = end.tz
         else:
             raise NotImplementedError
 
         data = np.arange(b, e, stride, dtype=np.int64)
-        data = data.view(_NS_DTYPE)
+        data = DatetimeIndex._simple_new(data, None, tz=tz)
     else:
         if isinstance(start, Timestamp):
             start = start.to_pydatetime()
@@ -1723,7 +1736,8 @@ def _process_concat_data(to_concat, name):
             else:
                 to_concat = [x.values for x in to_concat]
 
-            klass = DatetimeIndex
+            # well, technically not a "class" anymore...oh well
+            klass = DatetimeIndex._simple_new
             kwargs = {'tz': tz}
             concat = com._concat_compat
     else:

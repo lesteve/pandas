@@ -7,6 +7,8 @@ from datetime import datetime, date
 
 from pandas import Series, DataFrame, MultiIndex, PeriodIndex, date_range
 import pandas.util.testing as tm
+from pandas.util.testing import ensure_clean
+from pandas.core.config import set_option,get_option,config_prefix
 
 import numpy as np
 
@@ -68,7 +70,7 @@ class TestSeriesPlots(unittest.TestCase):
         import matplotlib.pyplot as plt
         import matplotlib.colors as colors
 
-        default_colors = 'brgyk'
+        default_colors = plt.rcParams.get('axes.color_cycle')
         custom_colors = 'rgcby'
 
         plt.close('all')
@@ -79,7 +81,7 @@ class TestSeriesPlots(unittest.TestCase):
 
         conv = colors.colorConverter
         for i, rect in enumerate(rects[::5]):
-            xp = conv.to_rgba(default_colors[i])
+            xp = conv.to_rgba(default_colors[i % len(default_colors)])
             rs = rect.get_facecolor()
             self.assert_(xp == rs)
 
@@ -692,8 +694,20 @@ class TestDataFrameGroupByPlots(unittest.TestCase):
         for ax in axes.ravel():
             self.assert_(len(ax.patches) > 0)
 
-PNG_PATH = 'tmp.png'
+    def test_option_mpl_style(self):
+        # just a sanity check
+        try:
+            import matplotlib
+        except:
+            raise nose.SkipTest
 
+        set_option('display.mpl_style', 'default')
+        set_option('display.mpl_style', None)
+        set_option('display.mpl_style', False)
+        try:
+            set_option('display.mpl_style', 'default2')
+        except ValueError:
+            pass
 
 def _check_plot_works(f, *args, **kwargs):
     import matplotlib.pyplot as plt
@@ -711,9 +725,9 @@ def _check_plot_works(f, *args, **kwargs):
         assert(ret is not None)  # do something more intelligent
     except Exception:
         pass
-    plt.savefig(PNG_PATH)
-    os.remove(PNG_PATH)
 
+    with ensure_clean() as path:
+        plt.savefig(path)
 
 def curpath():
     pth, _ = os.path.split(os.path.abspath(__file__))

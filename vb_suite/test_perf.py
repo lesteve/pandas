@@ -31,9 +31,12 @@ import os
 import argparse
 import tempfile
 import time
+import re
+
+import random
+import numpy as np
 
 DEFAULT_MIN_DURATION = 0.01
-BASELINE_COMMIT = '2149c50'  # 0.9.1 + regression fix + vb fixes # TODO: detect upstream/master
 
 parser = argparse.ArgumentParser(description='Use vbench to generate a report comparing performance between two commits.')
 parser.add_argument('-a', '--auto',
@@ -41,7 +44,7 @@ parser.add_argument('-a', '--auto',
                     action='store_true',
                     default=False)
 parser.add_argument('-b', '--base-commit',
-                    help='The commit serving as performance baseline (default: %s).' % BASELINE_COMMIT,
+                    help='The commit serving as performance baseline ',
                     type=str)
 parser.add_argument('-t', '--target-commit',
                     help='The commit to compare against the baseline (default: HEAD).',
@@ -54,6 +57,17 @@ parser.add_argument('-o', '--output',
                     metavar="<file>",
                     dest='log_file',
                     help='path of file in which to save the report (default: vb_suite.log).')
+parser.add_argument('-r', '--regex',
+                    metavar="REGEX",
+                    dest='regex',
+                    default="",
+                    help='regex pat, only tests whose name matches the regext will be run.')
+parser.add_argument('-s', '--seed',
+                    metavar="SEED",
+                    dest='seed',
+                    default=1234,
+                    type=int,
+                    help='integer value to seed PRNG with')
 
 
 def get_results_df(db, rev):
@@ -61,7 +75,7 @@ def get_results_df(db, rev):
     """Takes a git commit hash and returns a Dataframe of benchmark results
     """
     bench = DataFrame(db.get_benchmarks())
-    results = DataFrame(db.get_rev_results(rev).values())
+    results = DataFrame(map(list,db.get_rev_results(rev).values()))
 
     # Sinch vbench.db._reg_rev_results returns an unlabeled dict,
     # we have to break encapsulation a bit.
@@ -78,10 +92,8 @@ def main():
     from pandas import DataFrame
     from vbench.api import BenchmarkRunner
     from vbench.db import BenchmarkDB
+    from vbench.git import GitRepo
     from suite import REPO_PATH, BUILD, DB_PATH, PREPARE, dependencies, benchmarks
-
-    if not args.base_commit:
-        args.base_commit = BASELINE_COMMIT
 
     # GitRepo wants exactly 7 character hash?
     args.base_commit = args.base_commit[:7]
@@ -92,9 +104,14 @@ def main():
         args.log_file = os.path.abspath(
             os.path.join(REPO_PATH, 'vb_suite.log'))
 
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
     TMP_DIR = tempfile.mkdtemp()
     prprint("TMP_DIR = %s" % TMP_DIR)
     prprint("LOG_FILE = %s\n" % args.log_file)
+
+    benchmarks = [x for x in benchmarks if re.search(args.regex,x.name)]
 
     try:
         logfile = open(args.log_file, 'w')
@@ -103,6 +120,10 @@ def main():
         db = BenchmarkDB(DB_PATH)
 
         prprint("Initializing Runner...")
+
+        # all in a good cause...
+        GitRepo._parse_commit_log = _parse_wrapper(args.base_commit)
+
         runner = BenchmarkRunner(
             benchmarks, REPO_PATH, REPO_PATH, BUILD, DB_PATH,
             TMP_DIR, PREPARE, always_clean=True,
@@ -115,7 +136,8 @@ def main():
         # then overwrite the previous parse results
         # prprint ("Slaughtering kittens..." )
         (repo.shas, repo.messages,
-         repo.timestamps, repo.authors) = _parse_commit_log(REPO_PATH)
+         repo.timestamps, repo.authors) = _parse_commit_log(None,REPO_PATH,
+                                                                args.base_commit)
 
         h_head = args.target_commit or repo.shas[-1]
         h_baseline = args.base_commit
@@ -151,15 +173,25 @@ def main():
         totals = totals.dropna(
         ).sort("ratio").set_index('name')  # sort in ascending order
 
-        s = "\n\nResults:\n"
-        s += totals.to_string(
-            float_format=lambda x: "{:4.4f}".format(x).rjust(10))
-        s += "\n\n"
-        s += "Columns: test_name | target_duration [ms] | baseline_duration [ms] | ratio\n\n"
-        s += "- a Ratio of 1.30 means the target commit is 30% slower then the baseline.\n\n"
+
+        hdr = ftr = """
+-----------------------------------------------------------------------
+Test name                      | target[ms] |  base[ms]  |   ratio    |
+-----------------------------------------------------------------------
+""".strip() +"\n"
+
+        s = "\n"
+        s += hdr
+        for i in range(len(totals)):
+            t,b,r = totals.irow(i).values
+            s += "{0:30s} {1: 12.4f} {2: 12.4f} {3: 12.4f}\n".format(totals.index[i],t,b,r)
+        s+= ftr + "\n"
+
+        s += "Ratio < 1.0 means the target commit is faster then the baseline.\n"
+        s += "Seed used: %d\n\n" % args.seed
 
         s += 'Target [%s] : %s\n' % (h_head, repo.messages.get(h_head, ""))
-        s += 'Baseline [%s] : %s\n\n' % (
+        s += 'Base   [%s] : %s\n\n' % (
             h_baseline, repo.messages.get(h_baseline, ""))
 
         logfile.write(s)
@@ -178,12 +210,15 @@ def main():
 # hack , vbench.git ignores some commits, but we
 # need to be able to reference any commit.
 # modified from vbench.git
-def _parse_commit_log(repo_path):
+
+def _parse_commit_log(this,repo_path,base_commit=None):
     from vbench.git import parser, _convert_timezones
     from pandas import Series
     git_cmd = 'git --git-dir=%s/.git --work-tree=%s ' % (repo_path, repo_path)
-    githist = git_cmd + ('log --graph --pretty=format:'
-                         '\"::%h::%cd::%s::%an\" > githist.txt')
+    githist = git_cmd + ('log --graph --pretty=format:'+
+                         '\"::%h::%cd::%s::%an\"'+
+                         ('%s..' % base_commit)+
+                         '> githist.txt')
     os.system(githist)
     githist = open('githist.txt').read()
     os.remove('githist.txt')
@@ -215,10 +250,15 @@ def _parse_commit_log(repo_path):
     authors = Series(authors, shas)
     return shas[::-1], messages[::-1], timestamps[::-1], authors[::-1]
 
+# even worse, monkey patch vbench
+def _parse_wrapper(base_commit):
+    def inner(repo_path):
+        return _parse_commit_log(repo_path,base_commit)
+    return inner
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    if not args.auto and not args.base_commit and not args.target_commit:
+    if not args.auto and (not args.base_commit and not args.target_commit):
         parser.print_help()
     else:
         main()
